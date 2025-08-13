@@ -3,5 +3,5 @@ pandas
 plotly
 requests
 python-dotenv
-streamlit-authenticator
-PyYAML
+streamlit-authenticator==0.4.2
+PyYAML>=6.0.1
