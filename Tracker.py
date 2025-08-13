@@ -212,7 +212,7 @@ def log_entry(date, name, age_group, area, duration, symptoms, severity):
         'date': date.strftime('%Y-%m-%d'),
         'name': name,
         'age_group': age_group,
-        'area': area,
+        'area': area.strip().title(),
         'duration': duration,
         'symptoms': ', '.join(symptoms),
         'severity': severity,
