@@ -111,7 +111,7 @@ def analyze_trends(df):
     if df.empty:
         return {}, {}, {}
     
-    # Get last 7 days data
+    # Get last 7 days data for symptom frequency
     last_week = datetime.now() - timedelta(days=7)
     recent_data = df[df['date'] >= last_week]
     
@@ -126,20 +126,21 @@ def analyze_trends(df):
     # Age group analysis
     age_distribution = recent_data['age_group'].value_counts()
     
-    # Daily trends for top symptoms
-    top_symptoms = symptom_counts.head(3).index.tolist()
+    # Daily trends for top symptoms over last 30 days
+    top_symptoms = symptom_counts.head(3).index.tolist() if not symptom_counts.empty else []
     daily_trends = {}
     
     for symptom in top_symptoms:
         daily_counts = []
-        for i in range(30):  # Last 30 days
-            check_date = datetime.now() - timedelta(days=i)
-            day_data = df[df['date'].dt.date == check_date.date()]
+        # Go through last 30 days in chronological order
+        for i in range(30):
+            check_date = (datetime.now() - timedelta(days=29-i)).date()
+            day_data = df[df['date'].dt.date == check_date]
             count = sum(symptom.lower() in str(row['symptoms']).lower() 
                        for _, row in day_data.iterrows())
             daily_counts.append(count)
         
-        daily_trends[symptom] = list(reversed(daily_counts))
+        daily_trends[symptom] = daily_counts
     
     return symptom_counts, age_distribution, daily_trends
 
@@ -338,7 +339,8 @@ def main():
         st.subheader("📈 Symptom Trends (Last 30 Days)")
         if daily_trends:
             fig2 = go.Figure()
-            dates = [(datetime.now() - timedelta(days=29-i)).strftime('%m-%d') for i in range(30)]
+            # Generate correct date labels for last 30 days
+            dates = [(datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(29, -1, -1)]
             
             for symptom, counts in daily_trends.items():
                 fig2.add_trace(go.Scatter(
@@ -350,7 +352,8 @@ def main():
                 title="Daily Symptom Trends",
                 xaxis_title="Date",
                 yaxis_title="Number of Reports",
-                hovermode='x unified'
+                hovermode='x unified',
+                xaxis=dict(tickangle=45)
             )
             st.plotly_chart(fig2, use_container_width=True)
         
