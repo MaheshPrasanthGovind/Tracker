@@ -1,6 +1,6 @@
 """
 Local Health Tracker - MANAK Inspire Award Submission
-A community health monitoring system with authentication and admin management
+A community health monitoring system with optional admin authentication
 Author: Created for MANAK Inspire Award
 """
 import streamlit as st
@@ -71,11 +71,18 @@ st.markdown("""
         margin: 1rem 0;
         color: white;
     }
+    .user-choice {
+        background: linear-gradient(135deg, #55a3ff 0%, #003d82 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        margin: 2rem 0;
+        color: white;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Configuration
-CREDENTIALS_FILE = "credentials.yaml"
 DATA_FILE = "symptom_log.csv"
 OUTBREAK_THRESHOLD = 10
 OUTBREAK_DAYS = 7
@@ -85,102 +92,99 @@ def hash_password(password):
     """Hash password using SHA256"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-def create_default_credentials():
-    """Create default credentials.yaml file if it doesn't exist"""
-    if not os.path.exists(CREDENTIALS_FILE):
-        config = {
-            'credentials': {
-                'usernames': {
-                    'user1': {
-                        'name': 'Health User',
-                        'password': hash_password('userpass123'),
-                        'role': 'user'
-                    },
-                    'admin1': {
-                        'name': 'Health Admin',
-                        'password': hash_password('adminpass123'),
-                        'role': 'admin'
-                    }
-                }
-            },
-            'cookie': {
-                'name': 'local_health_tracker',
-                'key': 'health_tracker_key_2024',
-                'expiry_days': 1
-            }
-        }
-        
-        with open(CREDENTIALS_FILE, 'w') as file:
-            yaml.dump(config, file, default_flow_style=False)
-        
-        return config
-    return None
+def authenticate_admin(username, password):
+    """Authenticate admin with hardcoded credentials"""
+    admin_username = "Mahesh"
+    admin_password_hash = hash_password("Febcr7@2020")
+    input_password_hash = hash_password(password)
+    
+    return username == admin_username and input_password_hash == admin_password_hash
 
-def simple_authenticate(username, password):
-    """Simple authentication without external libraries"""
-    if not os.path.exists(CREDENTIALS_FILE):
-        create_default_credentials()
+def check_access():
+    """Handle user access control - admin choice or regular user"""
     
-    with open(CREDENTIALS_FILE, 'r') as file:
-        config = yaml.load(file, Loader=SafeLoader)
+    # Check if access has already been determined
+    if st.session_state.get('access_determined', False):
+        return st.session_state.get('is_admin', False), st.session_state.get('user_name', 'User')
     
-    hashed_input = hash_password(password)
-    
-    if username in config['credentials']['usernames']:
-        stored_password = config['credentials']['usernames'][username]['password']
-        if hashed_input == stored_password:
-            return True, config['credentials']['usernames'][username]
-    
-    return False, None
-
-def check_authentication():
-    """Handle user authentication"""
-    # Check if already authenticated
-    if st.session_state.get('authenticated', False):
-        return True, st.session_state['name'], st.session_state['username'], st.session_state['user_role']
-    
-    # Show login form
+    # Show user choice
     st.markdown("""
-    <div class="login-container">
-        <h1>🔐 Local Health Tracker</h1>
+    <div class="user-choice">
+        <h1>🏥 Local Health Tracker</h1>
         <h3>MANAK Inspire Award Submission</h3>
-        <p>Please Login to Continue</p>
+        <p>Welcome! Choose your access level to continue</p>
     </div>
     """, unsafe_allow_html=True)
     
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        login_button = st.form_submit_button("Login")
+    st.markdown("### 👤 Access Level Selection")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔧 I am an Admin", use_container_width=True, type="primary"):
+            st.session_state['user_choice'] = 'admin'
+            st.rerun()
+    
+    with col2:
+        if st.button("👥 I am a Regular User", use_container_width=True, type="secondary"):
+            st.session_state['user_choice'] = 'user'
+            st.rerun()
+    
+    # Handle admin login
+    if st.session_state.get('user_choice') == 'admin':
+        st.markdown("### 🔐 Admin Login Required")
         
-        if login_button:
-            is_valid, user_data = simple_authenticate(username, password)
+        with st.form("admin_login_form"):
+            username = st.text_input("Admin Username")
+            password = st.text_input("Admin Password", type="password")
+            login_button = st.form_submit_button("🔐 Admin Login")
             
-            if is_valid:
-                st.session_state['authenticated'] = True
-                st.session_state['name'] = user_data['name']
-                st.session_state['username'] = username
-                st.session_state['user_role'] = user_data.get('role', 'user')
-                st.success("✅ Login successful!")
-                st.rerun()
-            else:
-                st.error("❌ Invalid username or password")
+            if login_button:
+                if authenticate_admin(username, password):
+                    st.session_state['access_determined'] = True
+                    st.session_state['is_admin'] = True
+                    st.session_state['user_name'] = username
+                    st.success("✅ Admin login successful!")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid admin credentials")
+        
+        # Back button
+        if st.button("← Back to Selection"):
+            st.session_state['user_choice'] = None
+            st.rerun()
     
-    # Show default credentials
-    with st.expander("🔑 Default Login Credentials"):
-        st.info("""
-        **Regular User:** username: `user1`, password: `userpass123`  
-        **Admin User:** username: `admin1`, password: `adminpass123`
-        """)
+    # Handle regular user
+    elif st.session_state.get('user_choice') == 'user':
+        st.markdown("### 👤 Enter Your Name")
+        
+        with st.form("user_name_form"):
+            user_name = st.text_input("Your Name", placeholder="Enter your full name")
+            continue_button = st.form_submit_button("✅ Continue to App")
+            
+            if continue_button:
+                if user_name.strip():
+                    st.session_state['access_determined'] = True
+                    st.session_state['is_admin'] = False
+                    st.session_state['user_name'] = user_name.strip()
+                    st.success(f"✅ Welcome {user_name}!")
+                    st.rerun()
+                else:
+                    st.error("Please enter your name to continue")
+        
+        # Back button
+        if st.button("← Back to Selection"):
+            st.session_state['user_choice'] = None
+            st.rerun()
     
-    return False, None, None, None
+    return False, None
 
 # Data Management Functions
 def initialize_data_file():
     """Initialize CSV file with headers if it doesn't exist"""
     if not os.path.exists(DATA_FILE):
         df = pd.DataFrame(columns=[
-            'date', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
+            'date', 'name', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
         ])
         df.to_csv(DATA_FILE, index=False)
 
@@ -195,17 +199,18 @@ def load_data():
             return df
         else:
             return pd.DataFrame(columns=[
-                'date', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
+                'date', 'name', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
             ])
     except:
         return pd.DataFrame(columns=[
-            'date', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
+            'date', 'name', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
         ])
 
-def log_entry(date, age_group, area, duration, symptoms, severity):
+def log_entry(date, name, age_group, area, duration, symptoms, severity):
     """Log a new health entry to the CSV file"""
     new_entry = {
         'date': date.strftime('%Y-%m-%d'),
+        'name': name,
         'age_group': age_group,
         'area': area,
         'duration': duration,
@@ -398,30 +403,35 @@ def main():
     # Initialize data file
     initialize_data_file()
     
-    # Authentication check
-    is_authenticated, name, username, user_role = check_authentication()
+    # Check access control
+    is_admin, user_name = check_access()
     
-    if not is_authenticated:
+    if not st.session_state.get('access_determined', False):
         return
     
-    # Show user info and logout in sidebar
+    # Show user info in sidebar
     with st.sidebar:
-        st.success(f"👋 Welcome, **{name}**!")
-        st.info(f"🔑 Role: **{user_role.title()}**")
+        if is_admin:
+            st.success(f"👋 Welcome Admin **{user_name}**!")
+            st.info("🔑 Role: **Administrator**")
+        else:
+            st.success(f"👋 Welcome **{user_name}**!")
+            st.info("🔑 Role: **Regular User**")
         
-        if st.button("🚪 Logout"):
-            st.session_state['authenticated'] = False
-            for key in ['name', 'username', 'user_role']:
+        if st.button("🔄 Change Access Level"):
+            # Reset session state
+            for key in ['access_determined', 'is_admin', 'user_name', 'user_choice']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
     
     # App Header
+    role_display = "Administrator" if is_admin else "Regular User"
     st.markdown(f"""
     <div class="main-header">
         <h1>🏥 Local Health Tracker</h1>
         <p><strong>MANAK Inspire Award Submission</strong></p>
-        <p>Logged in as: <strong>{name}</strong> ({user_role.title()})</p>
+        <p>Welcome: <strong>{user_name}</strong> ({role_display})</p>
         <p>📍 Track symptoms • 📊 Visualize trends • 🚨 Detect outbreaks • 📚 Learn & prevent</p>
     </div>
     """, unsafe_allow_html=True)
@@ -438,7 +448,7 @@ def main():
     ]
     
     # Add admin panel for admin users
-    if user_role == 'admin':
+    if is_admin:
         navigation_options.append("🔧 Admin Panel")
     
     page = st.sidebar.selectbox("Choose a section:", navigation_options)
@@ -448,7 +458,7 @@ def main():
     
     if page == "🏠 Home & Data Entry":
         st.header("📝 Log Your Daily Health Status")
-        st.write("Help your community by anonymously sharing your health information.")
+        st.write("Help your community by sharing your health information.")
         
         col1, col2 = st.columns([2, 1])
         
@@ -461,6 +471,13 @@ def main():
                     "📅 Date of symptoms:",
                     value=datetime.now().date(),
                     max_value=datetime.now().date()
+                )
+                
+                # Name field - pre-filled with logged-in user's name
+                name = st.text_input(
+                    "👤 Your Name:",
+                    value=user_name,
+                    help="Your name for this health record"
                 )
                 
                 age_group = st.selectbox(
@@ -493,15 +510,15 @@ def main():
                 submitted = st.form_submit_button("🚀 Submit Health Data")
                 
                 if submitted:
-                    if area and symptoms:
-                        success = log_entry(entry_date, age_group, area, duration, symptoms, severity)
+                    if name.strip() and area and symptoms:
+                        success = log_entry(entry_date, name.strip(), age_group, area, duration, symptoms, severity)
                         if success:
-                            st.success("✅ Thank you! Your health data has been recorded anonymously.")
+                            st.success("✅ Thank you! Your health data has been recorded.")
                             st.balloons()
                         else:
                             st.error("❌ Error saving data. Please try again.")
                     else:
-                        st.warning("⚠️ Please fill in your area and select at least one symptom.")
+                        st.warning("⚠️ Please fill in your name, area and select at least one symptom.")
         
         with col2:
             st.markdown("""
@@ -510,7 +527,7 @@ def main():
                 <p>• Early outbreak detection</p>
                 <p>• Community health awareness</p>
                 <p>• Better healthcare planning</p>
-                <p>• Anonymous & secure</p>
+                <p>• Support research & prevention</p>
             </div>
             """, unsafe_allow_html=True)
             
@@ -758,15 +775,23 @@ def main():
             st.markdown("#### 🎯 Custom Data Export")
             
             if not df.empty:
-                csv_data = df.to_csv(index=False)
+                # Admin gets full data, regular users get anonymized data
+                if is_admin:
+                    export_df = df.copy()
+                    st.info("👤 Admin: Full data with names included")
+                else:
+                    export_df = df.drop('name', axis=1)
+                    st.info("👥 Regular User: Anonymized data (names removed)")
+                
+                csv_data = export_df.to_csv(index=False)
                 st.download_button(
-                    label="⬇️ Download All Data",
+                    label="⬇️ Download Data",
                     data=csv_data,
                     file_name=f"health_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime="text/csv"
                 )
                 
-                st.success(f"✅ Ready to export {len(df)} records")
+                st.success(f"✅ Ready to export {len(export_df)} records")
         
         with col2:
             st.markdown("#### 📋 Summary Report")
@@ -774,16 +799,17 @@ def main():
             summary_text = f"""
 HEALTH TRACKER SUMMARY REPORT
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Generated by: {user_name} ({'Admin' if is_admin else 'User'})
 
 OVERVIEW:
 • Total Health Reports: {len(df)}
-• Date Range: {df['date'].min().strftime('%Y-%m-%d')} to {df['date'].max().strftime('%Y-%m-%d')}
-• Areas Covered: {df['area'].nunique()}
+• Date Range: {df['date'].min().strftime('%Y-%m-%d') if not df.empty else 'N/A'} to {df['date'].max().strftime('%Y-%m-%d') if not df.empty else 'N/A'}
+• Areas Covered: {df['area'].nunique() if not df.empty else 0}
 
 RECENT ACTIVITY (Last 7 days):
-• Reports: {len(df[df['date'] >= datetime.now() - timedelta(days=7)])}
+• Reports: {len(df[df['date'] >= datetime.now() - timedelta(days=7)]) if not df.empty else 0}
 
-Note: This data is anonymized and aggregated for community health insights.
+Note: This data helps track community health trends for better healthcare planning.
             """
             
             st.download_button(
@@ -793,7 +819,7 @@ Note: This data is anonymized and aggregated for community health insights.
                 mime="text/plain"
             )
     
-    elif page == "🔧 Admin Panel" and user_role == 'admin':
+    elif page == "🔧 Admin Panel" and is_admin:
         show_admin_panel()
     
     # Footer
