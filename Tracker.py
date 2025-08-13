@@ -87,20 +87,21 @@ OUTBREAK_DAYS = 7
 def create_default_credentials():
     """Create default credentials.yaml file if it doesn't exist"""
     if not os.path.exists(CREDENTIALS_FILE):
-        passwords = ['userpass123', 'adminpass123']
-        hashed_passwords = stauth.Hasher(passwords).generate()
+        # Create hashed passwords using the new API
+        user_password = stauth.Hasher(['userpass123']).generate()[0]
+        admin_password = stauth.Hasher(['adminpass123']).generate()[0]
         
         config = {
             'credentials': {
                 'usernames': {
                     'user1': {
                         'name': 'Health User',
-                        'password': hashed_passwords[0],
+                        'password': user_password,
                         'role': 'user'
                     },
                     'admin1': {
                         'name': 'Health Admin',
-                        'password': hashed_passwords[1],
+                        'password': admin_password,
                         'role': 'admin'
                     }
                 }
