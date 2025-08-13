@@ -1,17 +1,20 @@
 """
 Local Health Tracker - MANAK Inspire Award Submission
-A community health monitoring system for tracking symptoms and detecting outbreaks
+A community health monitoring system with authentication and admin management
 Author: Created for MANAK Inspire Award
 """
 
 import streamlit as st
+import streamlit_authenticator as stauth
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
-from io import BytesIO
+import yaml
+from yaml.loader import SafeLoader
 import base64
+from io import BytesIO
 
 # Configure Streamlit page
 st.set_page_config(
@@ -56,14 +59,128 @@ st.markdown("""
         color: white;
         margin: 0.5rem 0;
     }
+    .login-container {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        margin: 2rem 0;
+        color: white;
+        text-align: center;
+    }
+    .admin-panel {
+        background: linear-gradient(135deg, #fd79a8 0%, #e84393 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        color: white;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Data file configuration
+# Configuration
+CREDENTIALS_FILE = "credentials.yaml"
 DATA_FILE = "symptom_log.csv"
-OUTBREAK_THRESHOLD = 10  # Configurable threshold for outbreak detection
-OUTBREAK_DAYS = 7  # Days to look back for outbreak detection
+OUTBREAK_THRESHOLD = 10
+OUTBREAK_DAYS = 7
 
+# Authentication Functions
+def create_default_credentials():
+    """Create default credentials.yaml file if it doesn't exist"""
+    if not os.path.exists(CREDENTIALS_FILE):
+        passwords = ['userpass123', 'adminpass123']
+        hashed_passwords = stauth.Hasher(passwords).generate()
+        
+        config = {
+            'credentials': {
+                'usernames': {
+                    'user1': {
+                        'name': 'Health User',
+                        'password': hashed_passwords[0],
+                        'role': 'user'
+                    },
+                    'admin1': {
+                        'name': 'Health Admin',
+                        'password': hashed_passwords[1],
+                        'role': 'admin'
+                    }
+                }
+            },
+            'cookie': {
+                'name': 'local_health_tracker',
+                'key': 'health_tracker_signature_key_2024',
+                'expiry_days': 1
+            }
+        }
+        
+        with open(CREDENTIALS_FILE, 'w') as file:
+            yaml.dump(config, file, default_flow_style=False)
+        
+        return config
+    return None
+
+def load_authenticator():
+    """Load and initialize the authenticator"""
+    create_default_credentials()
+    
+    with open(CREDENTIALS_FILE, 'r') as file:
+        config = yaml.load(file, Loader=SafeLoader)
+    
+    authenticator = stauth.Authenticate(
+        config['credentials'],
+        config['cookie']['name'],
+        config['cookie']['key'],
+        config['cookie']['expiry_days']
+    )
+    
+    return authenticator, config
+
+def check_authentication():
+    """Handle user authentication"""
+    if 'authenticator' not in st.session_state:
+        st.session_state['authenticator'], st.session_state['config'] = load_authenticator()
+    
+    authenticator = st.session_state['authenticator']
+    config = st.session_state['config']
+    
+    # Check if already authenticated
+    if st.session_state.get('authentication_status'):
+        return True, st.session_state['name'], st.session_state['username'], st.session_state['user_role']
+    
+    # Show login form
+    st.markdown("""
+    <div class="login-container">
+        <h1>🔐 Local Health Tracker</h1>
+        <h3>MANAK Inspire Award Submission</h3>
+        <p>Secure Access Required - Please Login to Continue</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    name, authentication_status, username = authenticator.login('Login', 'main')
+    
+    if authentication_status == False:
+        st.error('❌ Username/password is incorrect')
+        return False, None, None, None
+    elif authentication_status == None:
+        st.warning('👋 Please enter your username and password')
+        with st.expander("🔑 Default Login Credentials"):
+            st.info("""
+            **Regular User:** username: `user1`, password: `userpass123`  
+            **Admin User:** username: `admin1`, password: `adminpass123`
+            
+            ⚠️ **Change these passwords in production!**
+            """)
+        return False, None, None, None
+    
+    # Successful authentication
+    user_role = config['credentials']['usernames'][username].get('role', 'user')
+    st.session_state['authentication_status'] = True
+    st.session_state['name'] = name
+    st.session_state['username'] = username
+    st.session_state['user_role'] = user_role
+    
+    return True, name, username, user_role
+
+# Data Management Functions
 def initialize_data_file():
     """Initialize CSV file with headers if it doesn't exist"""
     if not os.path.exists(DATA_FILE):
@@ -97,7 +214,6 @@ def log_entry(date, age_group, area, duration, symptoms, severity):
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
-    # Append to CSV
     df_new = pd.DataFrame([new_entry])
     if os.path.exists(DATA_FILE):
         df_new.to_csv(DATA_FILE, mode='a', header=False, index=False)
@@ -151,11 +267,9 @@ def detect_outbreaks(df):
     if df.empty:
         return outbreaks
     
-    # Check last OUTBREAK_DAYS for fever cases by area
     cutoff_date = datetime.now() - timedelta(days=OUTBREAK_DAYS)
     recent_data = df[df['date'] >= cutoff_date]
     
-    # Group by area and check for fever cases
     for area in recent_data['area'].unique():
         area_data = recent_data[recent_data['area'] == area]
         fever_cases = 0
@@ -174,35 +288,256 @@ def detect_outbreaks(df):
     
     return outbreaks
 
-def create_download_link(df, filename, link_text):
-    """Create a download link for CSV data"""
-    csv = df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">{link_text}</a>'
-    return href
+# Admin Panel Functions
+def show_admin_panel():
+    """Display admin panel for data management"""
+    st.markdown("""
+    <div class="admin-panel">
+        <h2>🔧 Admin Control Panel</h2>
+        <p>Manage health data, view analytics, and maintain system integrity</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    df = load_data()
+    
+    if df.empty:
+        st.warning("📭 No health data available in the system")
+        return
+    
+    # Admin statistics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("📊 Total Records", len(df))
+    
+    with col2:
+        recent_count = len(df[df['date'] >= datetime.now() - timedelta(days=7)])
+        st.metric("📅 This Week", recent_count)
+    
+    with col3:
+        st.metric("🏘️ Areas Covered", df['area'].nunique())
+    
+    with col4:
+        if len(df) > 0:
+            avg_severity = df['severity'].mean()
+            st.metric("📊 Avg Severity", f"{avg_severity:.1f}/10")
+    
+    # Data management section
+    st.subheader("📋 Health Data Management")
+    
+    tab1, tab2, tab3 = st.tabs(["🔍 View Data", "🗑️ Delete Records", "📊 Advanced Analytics"])
+    
+    with tab1:
+        st.write("**All Health Records:**")
+        
+        # Add filters
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            selected_areas = st.multiselect(
+                "Filter by Area:",
+                options=df['area'].unique(),
+                default=df['area'].unique()
+            )
+        
+        with col2:
+            date_range = st.date_input(
+                "Date Range:",
+                value=[df['date'].min().date(), df['date'].max().date()],
+                min_value=df['date'].min().date(),
+                max_value=df['date'].max().date()
+            )
+        
+        with col3:
+            selected_age_groups = st.multiselect(
+                "Filter by Age Group:",
+                options=df['age_group'].unique(),
+                default=df['age_group'].unique()
+            )
+        
+        # Apply filters
+        filtered_df = df.copy()
+        if selected_areas:
+            filtered_df = filtered_df[filtered_df['area'].isin(selected_areas)]
+        
+        if len(date_range) == 2:
+            filtered_df = filtered_df[
+                (filtered_df['date'].dt.date >= date_range[0]) & 
+                (filtered_df['date'].dt.date <= date_range[1])
+            ]
+        
+        if selected_age_groups:
+            filtered_df = filtered_df[filtered_df['age_group'].isin(selected_age_groups)]
+        
+        st.dataframe(
+            filtered_df.sort_values('timestamp', ascending=False),
+            use_container_width=True,
+            height=400
+        )
+        
+        # Export filtered data
+        if not filtered_df.empty:
+            csv = filtered_df.to_csv(index=False)
+            st.download_button(
+                label="⬇️ Download Filtered Data",
+                data=csv,
+                file_name=f"filtered_health_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+    
+    with tab2:
+        st.write("**Delete Health Records:**")
+        st.warning("⚠️ **Caution:** Record deletion is permanent and cannot be undone!")
+        
+        if not df.empty:
+            # Show records with selection
+            st.write("Select records to delete:")
+            
+            # Create a simplified display for selection
+            display_df = df.copy()
+            display_df['Select'] = False
+            display_df = display_df[['Select', 'date', 'age_group', 'area', 'symptoms', 'severity']]
+            
+            # Show recent records for deletion (last 50)
+            recent_df = df.tail(50).copy()
+            
+            selected_indices = []
+            
+            for idx, row in recent_df.iterrows():
+                col1, col2 = st.columns([1, 10])
+                with col1:
+                    if st.checkbox("", key=f"delete_{idx}"):
+                        selected_indices.append(idx)
+                with col2:
+                    st.write(f"**{row['date'].strftime('%Y-%m-%d')}** | {row['area']} | {row['age_group']} | {row['symptoms'][:50]}...")
+            
+            if selected_indices:
+                st.error(f"⚠️ You have selected {len(selected_indices)} records for deletion")
+                
+                if st.button("🗑️ Delete Selected Records", type="secondary"):
+                    # Confirmation
+                    if st.button("⚠️ CONFIRM DELETE - This cannot be undone!", type="primary"):
+                        # Delete selected records
+                        df_updated = df.drop(selected_indices)
+                        df_updated.to_csv(DATA_FILE, index=False)
+                        
+                        st.success(f"✅ Successfully deleted {len(selected_indices)} records")
+                        st.rerun()
+    
+    with tab3:
+        st.write("**Advanced Analytics & Insights:**")
+        
+        if not df.empty:
+            # Symptom patterns by area
+            st.subheader("🗺️ Symptom Distribution by Area")
+            area_symptoms = {}
+            
+            for _, row in df.iterrows():
+                area = row['area']
+                symptoms = str(row['symptoms']).split(', ')
+                
+                if area not in area_symptoms:
+                    area_symptoms[area] = {}
+                
+                for symptom in symptoms:
+                    symptom = symptom.strip()
+                    area_symptoms[area][symptom] = area_symptoms[area].get(symptom, 0) + 1
+            
+            # Create heatmap data
+            all_symptoms = set()
+            for area_data in area_symptoms.values():
+                all_symptoms.update(area_data.keys())
+            
+            heatmap_data = []
+            for area, symptoms in area_symptoms.items():
+                for symptom in all_symptoms:
+                    heatmap_data.append({
+                        'Area': area,
+                        'Symptom': symptom,
+                        'Count': symptoms.get(symptom, 0)
+                    })
+            
+            heatmap_df = pd.DataFrame(heatmap_data)
+            
+            if not heatmap_df.empty:
+                fig_heatmap = px.density_heatmap(
+                    heatmap_df, 
+                    x='Symptom', 
+                    y='Area', 
+                    z='Count',
+                    title="Symptom Distribution Across Areas"
+                )
+                st.plotly_chart(fig_heatmap, use_container_width=True)
+            
+            # Time-based patterns
+            st.subheader("⏰ Temporal Patterns")
+            
+            df['hour'] = df['timestamp'].dt.hour
+            df['day_of_week'] = df['timestamp'].dt.dayofweek
+            
+            hourly_reports = df['hour'].value_counts().sort_index()
+            
+            fig_hourly = px.bar(
+                x=hourly_reports.index,
+                y=hourly_reports.values,
+                title="Reports by Hour of Day",
+                labels={'x': 'Hour', 'y': 'Number of Reports'}
+            )
+            st.plotly_chart(fig_hourly, use_container_width=True)
+
+def generate_password_hash(password):
+    """Generate hashed password for new users"""
+    return stauth.Hasher([password]).generate()[0]
 
 def main():
     """Main application function"""
     
+    # Authentication check
+    is_authenticated, name, username, user_role = check_authentication()
+    
+    if not is_authenticated:
+        return
+    
     # Initialize data file
     initialize_data_file()
     
+    # Show user info and logout
+    with st.sidebar:
+        st.success(f"👋 Welcome, **{name}**!")
+        st.info(f"🔑 Role: **{user_role.title()}**")
+        
+        authenticator = st.session_state['authenticator']
+        authenticator.logout('Logout', 'sidebar')
+        
+        if st.session_state.get('authentication_status') == False:
+            st.rerun()
+    
     # App Header
-    st.markdown("""
+    st.markdown(f"""
     <div class="main-header">
         <h1>🏥 Local Health Tracker</h1>
         <p><strong>MANAK Inspire Award Submission</strong></p>
-        <p>Empowering communities through collaborative health monitoring</p>
+        <p>Logged in as: <strong>{name}</strong> ({user_role.title()})</p>
         <p>📍 Track symptoms • 📊 Visualize trends • 🚨 Detect outbreaks • 📚 Learn & prevent</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar navigation
+    # Sidebar navigation - different options for admin vs regular users
     st.sidebar.title("🧭 Navigation")
-    page = st.sidebar.selectbox(
-        "Choose a section:",
-        ["🏠 Home & Data Entry", "📊 Health Dashboard", "🚨 Outbreak Alerts", "📚 Health Education", "📥 Data Export"]
-    )
+    
+    navigation_options = [
+        "🏠 Home & Data Entry", 
+        "📊 Health Dashboard", 
+        "🚨 Outbreak Alerts", 
+        "📚 Health Education", 
+        "📥 Data Export"
+    ]
+    
+    # Add admin panel for admin users
+    if user_role == 'admin':
+        navigation_options.append("🔧 Admin Panel")
+    
+    page = st.sidebar.selectbox("Choose a section:", navigation_options)
     
     # Load existing data
     df = load_data()
@@ -218,7 +553,6 @@ def main():
             with st.form("health_entry_form"):
                 st.subheader("Health Information Form")
                 
-                # Form fields
                 entry_date = st.date_input(
                     "📅 Date of symptoms:",
                     value=datetime.now().date(),
@@ -276,7 +610,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             
-            # Show recent stats
             if not df.empty:
                 total_entries = len(df)
                 recent_entries = len(df[df['date'] >= datetime.now() - timedelta(days=7)])
@@ -296,7 +629,6 @@ def main():
             st.warning("📭 No data available yet. Please add some health entries first!")
             return
         
-        # Analyze trends
         symptom_counts, age_distribution, daily_trends = analyze_trends(df)
         
         # Key metrics
@@ -318,7 +650,7 @@ def main():
                 top_symptom = symptom_counts.index[0]
                 st.metric("🔥 Top Symptom", top_symptom)
         
-        # Chart 1: Symptom frequency (Bar chart)
+        # Chart 1: Symptom frequency
         st.subheader("📊 Most Common Symptoms (Last 7 Days)")
         if not symptom_counts.empty:
             fig1 = px.bar(
@@ -335,11 +667,10 @@ def main():
             )
             st.plotly_chart(fig1, use_container_width=True)
         
-        # Chart 2: Daily trends (Line chart)
+        # Chart 2: Daily trends
         st.subheader("📈 Symptom Trends (Last 30 Days)")
         if daily_trends:
             fig2 = go.Figure()
-            # Generate correct date labels for last 30 days
             dates = [(datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(29, -1, -1)]
             
             for symptom, counts in daily_trends.items():
@@ -357,7 +688,7 @@ def main():
             )
             st.plotly_chart(fig2, use_container_width=True)
         
-        # Chart 3: Age distribution (Pie chart)
+        # Chart 3: Age distribution
         st.subheader("👥 Age Group Distribution")
         if not age_distribution.empty:
             fig3 = px.pie(
@@ -391,7 +722,6 @@ def main():
     elif page == "🚨 Outbreak Alerts":
         st.header("🚨 Outbreak Detection & Alerts")
         
-        # Configuration section
         with st.expander("⚙️ Alert Configuration"):
             col1, col2 = st.columns(2)
             with col1:
@@ -405,7 +735,6 @@ def main():
                     min_value=3, max_value=14, value=OUTBREAK_DAYS
                 )
         
-        # Detect outbreaks
         outbreaks = detect_outbreaks(df)
         
         if outbreaks:
@@ -422,7 +751,6 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
             
-            # Recommended actions
             st.markdown("### 🎯 Recommended Actions")
             
             col1, col2 = st.columns(2)
@@ -451,7 +779,6 @@ def main():
             st.success("✅ No outbreak alerts at this time")
             st.info("🛡️ The system continuously monitors for unusual patterns in symptom reports.")
             
-            # Show monitoring stats
             if not df.empty:
                 st.subheader("📊 Monitoring Statistics")
                 
@@ -481,214 +808,239 @@ def main():
             
             with col1:
                 st.markdown("""
-                #### 🚨 Seek Immediate Medical Care If:
-                - **High fever** (>101°F/38.3°C) for >3 days
-                - **Difficulty breathing** or chest pain
-                - **Severe dehydration** (dizziness, no urination)
-                - **Persistent vomiting** unable to keep fluids down
+                #### 🚨 Emergency Warning Signs:
+                - **High fever** (>101.3°F / 38.5°C) for more than 3 days
+                - **Difficulty breathing** or shortness of breath
+                - **Persistent chest pain** or pressure
                 - **Severe headache** with neck stiffness
-                - **Rash** with fever
-                - **Confusion** or altered mental state
+                - **Persistent vomiting** or inability to keep fluids down
+                - **Signs of dehydration** (dizziness, dry mouth, little/no urination)
+                - **Bluish lips or face**
+                - **Severe abdominal pain**
                 """)
             
             with col2:
                 st.markdown("""
-                #### 📞 Emergency Contacts
-                - **National Emergency:** 108
-                - **Medical Emergency:** 102
-                - **Poison Control:** 1066
-                - **Mental Health:** 9152987821
-                
-                #### 🏥 Nearby Hospitals
-                Update this section with local hospital information
+                #### 🏥 Seek Medical Care For:
+                - **Fever** lasting more than 3 days
+                - **Cough** with blood or lasting >2 weeks
+                - **Rapid weight loss** without trying
+                - **Persistent fatigue** affecting daily activities
+                - **Changes in mental status**
+                - **Severe dehydration symptoms**
+                - **Worsening of chronic conditions**
+                - **Any symptom causing concern**
                 """)
+            
+            st.error("🆘 **Emergency Number: 108** (or your local emergency number)")
         
         with tab2:
-            st.subheader("🛡️ Disease Prevention Tips")
+            st.subheader("🛡️ Prevention is Better Than Cure")
             
             col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown("""
-                #### 🧼 Personal Hygiene
-                - Wash hands frequently with soap (20+ seconds)
-                - Use hand sanitizer (60%+ alcohol)
-                - Avoid touching face, eyes, nose
-                - Cover coughs and sneezes
-                - Clean frequently touched surfaces
-                """)
-                
-                st.markdown("""
-                #### 💧 Stay Healthy
-                - Drink 8-10 glasses of water daily
-                - Eat balanced diet with fruits/vegetables
-                - Get 7-8 hours of sleep
-                - Exercise regularly (30 min/day)
-                - Manage stress through relaxation
+                #### 🧼 Basic Hygiene:
+                - **Wash hands frequently** with soap for 20+ seconds
+                - **Use hand sanitizer** when soap isn't available
+                - **Cover coughs and sneezes** with elbow or tissue
+                - **Avoid touching** face, eyes, nose with unwashed hands
+                - **Clean and disinfect** frequently touched surfaces
+                - **Maintain good oral hygiene**
                 """)
             
             with col2:
                 st.markdown("""
-                #### 🏠 Home Safety
-                - Maintain clean living environment
-                - Ensure proper ventilation
-                - Store food safely
-                - Use clean drinking water
-                - Keep first aid kit ready
+                #### 🍎 Healthy Lifestyle:
+                - **Balanced diet** with fruits and vegetables
+                - **Regular exercise** and adequate sleep
+                - **Stay hydrated** - drink plenty of water
+                - **Manage stress** through relaxation techniques
+                - **Avoid smoking and excessive alcohol**
+                - **Get regular health check-ups**
                 """)
-                
-                st.markdown("""
-                #### 👨‍👩‍👧‍👦 Community Health
-                - Share health information responsibly
-                - Support sick community members
-                - Report unusual health patterns
-                - Participate in health initiatives
-                - Follow public health guidelines
-                """)
+            
+            st.markdown("""
+            #### 🏠 Home & Community Health:
+            - Keep your living spaces clean and well-ventilated
+            - Properly dispose of waste and maintain sanitation
+            - Ensure safe drinking water and food storage
+            - Practice social distancing when feeling unwell
+            - Support community health initiatives
+            """)
         
         with tab3:
             st.subheader("📋 Health Guidelines & Resources")
             
             st.markdown("""
-            #### 🌡️ Common Symptoms Guide
+            #### 🌡️ Symptom Monitoring Guidelines:
             
-            | Symptom | Possible Causes | When to Worry | Home Care |
-            |---------|----------------|---------------|-----------|
-            | Fever | Infection, heat exhaustion | >3 days, >101°F | Rest, fluids, paracetamol |
-            | Cough | Cold, allergies, infection | Blood, breathing issues | Honey, warm water |
-            | Headache | Tension, dehydration | Severe, with neck pain | Rest, hydrate |
-            | Fatigue | Poor sleep, stress | Persistent >2 weeks | Regular sleep, exercise |
-            | Stomach pain | Food, stress, infection | Severe, persistent | Light diet, fluids |
+            **🔴 High Priority (Seek immediate care):**
+            - Temperature >101.3°F (38.5°C)
+            - Difficulty breathing
+            - Chest pain or pressure
+            - Severe headache with stiff neck
+            
+            **🟡 Medium Priority (Monitor closely):**
+            - Persistent cough >1 week
+            - Moderate fever 100-101°F
+            - Fatigue affecting daily activities
+            - Mild breathing difficulty
+            
+            **🟢 Low Priority (Home care):**
+            - Mild cold symptoms
+            - Low-grade fever <100°F
+            - Minor aches and pains
+            - Mild fatigue
             """)
             
-            st.markdown("""
-            #### 📱 Useful Health Apps & Websites
-            - **Aarogya Setu:** Government health app
-            - **MyGov:** Official government health updates  
-            - **WHO:** World Health Organization resources
-            - **Local Health Department:** Check your state website
-            """)
+            # Download health guide
+            health_guide_text = """
+LOCAL HEALTH TRACKER - HEALTH GUIDE
+
+EMERGENCY WARNING SIGNS:
+• High fever (>101.3°F) for more than 3 days
+• Difficulty breathing or shortness of breath
+• Persistent chest pain or pressure
+• Severe headache with neck stiffness
+• Persistent vomiting
+• Signs of dehydration
+• Bluish lips or face
+
+PREVENTION TIPS:
+• Wash hands frequently with soap
+• Cover coughs and sneezes
+• Maintain social distancing when sick
+• Eat balanced diet and exercise regularly
+• Stay hydrated and get adequate sleep
+• Clean and disinfect surfaces
+
+EMERGENCY CONTACTS:
+• Emergency Services: 108
+• National Health Helpline: 104
+• COVID-19 Helpline: 1075
+
+Remember: This app is for educational purposes only. 
+Always consult healthcare professionals for medical advice.
+            """
+            
+            st.download_button(
+                label="📥 Download Health Guide (PDF)",
+                data=health_guide_text,
+                file_name="health_guide.txt",
+                mime="text/plain"
+            )
     
     elif page == "📥 Data Export":
         st.header("📥 Data Export & Reports")
         
         if df.empty:
-            st.warning("📭 No data available for export.")
+            st.warning("📭 No data available for export")
             return
+        
+        st.subheader("📊 Export Options")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("📊 Export Options")
+            # Export filtered data
+            st.markdown("#### 🎯 Custom Data Export")
             
-            # CSV download
-            st.markdown("#### 📄 Download Raw Data")
-            csv_data = df.to_csv(index=False)
-            st.download_button(
-                label="⬇️ Download Complete Dataset (CSV)",
-                data=csv_data,
-                file_name=f"health_data_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
+            export_areas = st.multiselect(
+                "Select Areas:",
+                options=df['area'].unique(),
+                default=df['area'].unique()
             )
             
-            # Filtered export options
-            st.markdown("#### 🔍 Filtered Exports")
-            
-            date_range = st.date_input(
-                "Select date range:",
-                value=[datetime.now().date() - timedelta(days=30), datetime.now().date()],
-                max_value=datetime.now().date()
+            export_date_range = st.date_input(
+                "Date Range:",
+                value=[df['date'].min().date(), df['date'].max().date()],
+                min_value=df['date'].min().date(),
+                max_value=df['date'].max().date()
             )
             
-            if len(date_range) == 2:
-                filtered_df = df[(df['date'].dt.date >= date_range[0]) & 
-                               (df['date'].dt.date <= date_range[1])]
+            # Apply filters for export
+            export_df = df.copy()
+            if export_areas:
+                export_df = export_df[export_df['area'].isin(export_areas)]
+            
+            if len(export_date_range) == 2:
+                export_df = export_df[
+                    (export_df['date'].dt.date >= export_date_range[0]) & 
+                    (export_df['date'].dt.date <= export_date_range[1])
+                ]
+            
+            if not export_df.empty:
+                csv_data = export_df.to_csv(index=False)
+                st.download_button(
+                    label="⬇️ Download CSV",
+                    data=csv_data,
+                    file_name=f"health_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv"
+                )
                 
-                if not filtered_df.empty:
-                    filtered_csv = filtered_df.to_csv(index=False)
-                    st.download_button(
-                        label="⬇️ Download Filtered Data",
-                        data=filtered_csv,
-                        file_name=f"filtered_health_data_{datetime.now().strftime('%Y%m%d')}.csv",
-                        mime="text/csv"
-                    )
+                st.success(f"✅ Ready to export {len(export_df)} records")
         
         with col2:
-            st.subheader("📈 Weekly Health Summary")
+            # Summary report
+            st.markdown("#### 📋 Summary Report")
             
-            # Generate summary statistics
-            recent_df = df[df['date'] >= datetime.now() - timedelta(days=7)]
+            summary_text = f"""
+HEALTH TRACKER SUMMARY REPORT
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+OVERVIEW:
+• Total Health Reports: {len(df)}
+• Date Range: {df['date'].min().strftime('%Y-%m-%d')} to {df['date'].max().strftime('%Y-%m-%d')}
+• Areas Covered: {df['area'].nunique()}
+• Age Groups: {', '.join(df['age_group'].unique())}
+
+TOP 5 SYMPTOMS:
+"""
             
-            if not recent_df.empty:
-                st.markdown("#### 📊 This Week's Statistics")
-                
-                # Summary metrics
-                total_reports = len(recent_df)
-                unique_areas = recent_df['area'].nunique()
-                avg_severity = recent_df['severity'].mean()
-                
-                st.write(f"**Total Reports:** {total_reports}")
-                st.write(f"**Areas Covered:** {unique_areas}")
-                st.write(f"**Average Severity:** {avg_severity:.1f}/10")
-                
-                # Top symptoms
-                all_symptoms = []
-                for symptoms_str in recent_df['symptoms'].dropna():
-                    symptoms_list = [s.strip() for s in str(symptoms_str).split(',')]
-                    all_symptoms.extend(symptoms_list)
-                
-                if all_symptoms:
-                    symptom_counts = pd.Series(all_symptoms).value_counts().head(5)
-                    st.markdown("**Top 5 Symptoms:**")
-                    for symptom, count in symptom_counts.items():
-                        st.write(f"• {symptom}: {count} reports")
-                
-                # Age distribution
-                age_dist = recent_df['age_group'].value_counts()
-                st.markdown("**Age Group Distribution:**")
-                for age_group, count in age_dist.items():
-                    percentage = (count / total_reports) * 100
-                    st.write(f"• {age_group}: {count} ({percentage:.1f}%)")
+            # Add top symptoms to summary
+            all_symptoms = []
+            for symptoms_str in df['symptoms'].dropna():
+                symptoms_list = [s.strip() for s in str(symptoms_str).split(',')]
+                all_symptoms.extend(symptoms_list)
             
-            else:
-                st.info("No data available for the past week.")
-        
-        # Data insights
-        st.subheader("🧠 Data Insights")
-        
-        if not df.empty:
-            col1, col2, col3 = st.columns(3)
+            if all_symptoms:
+                symptom_counts = pd.Series(all_symptoms).value_counts()
+                for i, (symptom, count) in enumerate(symptom_counts.head(5).items()):
+                    summary_text += f"• {symptom}: {count} reports\n"
             
-            with col1:
-                st.markdown("""
-                <div class="metric-card">
-                    <h4>📅 Data Coverage</h4>
-                    <p>First Report: """ + df['date'].min().strftime('%Y-%m-%d') + """</p>
-                    <p>Latest Report: """ + df['date'].max().strftime('%Y-%m-%d') + """</p>
-                    <p>Total Days: """ + str((df['date'].max() - df['date'].min()).days + 1) + """</p>
-                </div>
-                """, unsafe_allow_html=True)
+            summary_text += f"""
+AREAS COVERED:
+{chr(10).join(f'• {area}: {count} reports' for area, count in df['area'].value_counts().head(10).items())}
+
+RECENT ACTIVITY (Last 7 days):
+• Reports: {len(df[df['date'] >= datetime.now() - timedelta(days=7)])}
+• Average Severity: {df[df['date'] >= datetime.now() - timedelta(days=7)]['severity'].mean():.1f}/10
+
+Note: This data is anonymized and aggregated for community health insights.
+            """
             
-            with col2:
-                st.markdown("""
-                <div class="metric-card">
-                    <h4>🏘️ Geographic Coverage</h4>
-                    <p>Total Areas: """ + str(df['area'].nunique()) + """</p>
-                    <p>Most Active: """ + str(df['area'].mode().iloc[0] if not df['area'].mode().empty else 'N/A') + """</p>
-                    <p>Avg Reports/Area: """ + str(round(len(df) / df['area'].nunique(), 1)) + """</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col3:
-                most_common_duration = df['duration'].mode().iloc[0] if not df['duration'].mode().empty else 'N/A'
-                st.markdown("""
-                <div class="metric-card">
-                    <h4>⏱️ Symptom Duration</h4>
-                    <p>Most Common: """ + most_common_duration + """</p>
-                    <p>Avg Severity: """ + str(round(df['severity'].mean(), 1)) + """/10</p>
-                    <p>High Severity: """ + str(len(df[df['severity'] >= 7])) + """ reports</p>
-                </div>
-                """, unsafe_allow_html=True)
+            st.download_button(
+                label="📋 Download Summary Report",
+                data=summary_text,
+                file_name=f"health_summary_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain"
+            )
+    
+    elif page == "🔧 Admin Panel" and user_role == 'admin':
+        show_admin_panel()
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #666; padding: 2rem;">
+        <p>🏥 <strong>Local Health Tracker</strong> | MANAK Inspire Award 2024</p>
+        <p>💡 <em>Innovation for Community Health • Empowering Data-Driven Healthcare</em></p>
+        <p>⚠️ <strong>Disclaimer:</strong> This tool is for educational and monitoring purposes only. 
+        Always consult healthcare professionals for medical advice and treatment.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
