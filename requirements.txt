@@ -1,5 +1,5 @@
-streamlit==1.28.1
-streamlit-authenticator==0.2.3
-pandas==2.0.3
-plotly==5.17.0
-PyYAML==6.0.1
+streamlit
+streamlit-authenticator
+pandas
+plotly
+PyYAML
