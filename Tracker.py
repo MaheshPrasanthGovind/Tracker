@@ -3,9 +3,7 @@ Local Health Tracker - MANAK Inspire Award Submission
 A community health monitoring system with authentication and admin management
 Author: Created for MANAK Inspire Award
 """
-
 import streamlit as st
-import streamlit_authenticator as stauth
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -13,8 +11,7 @@ from datetime import datetime, timedelta
 import os
 import yaml
 from yaml.loader import SafeLoader
-import base64
-from io import BytesIO
+import hashlib
 
 # Configure Streamlit page
 st.set_page_config(
@@ -84,31 +81,31 @@ OUTBREAK_THRESHOLD = 10
 OUTBREAK_DAYS = 7
 
 # Authentication Functions
+def hash_password(password):
+    """Hash password using SHA256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
 def create_default_credentials():
     """Create default credentials.yaml file if it doesn't exist"""
     if not os.path.exists(CREDENTIALS_FILE):
-        # Create hashed passwords using the new API
-        user_password = stauth.Hasher(['userpass123']).generate()[0]
-        admin_password = stauth.Hasher(['adminpass123']).generate()[0]
-        
         config = {
             'credentials': {
                 'usernames': {
                     'user1': {
                         'name': 'Health User',
-                        'password': user_password,
+                        'password': hash_password('userpass123'),
                         'role': 'user'
                     },
                     'admin1': {
                         'name': 'Health Admin',
-                        'password': admin_password,
+                        'password': hash_password('adminpass123'),
                         'role': 'admin'
                     }
                 }
             },
             'cookie': {
                 'name': 'local_health_tracker',
-                'key': 'health_tracker_signature_key_2024',
+                'key': 'health_tracker_key_2024',
                 'expiry_days': 1
             }
         }
@@ -119,32 +116,27 @@ def create_default_credentials():
         return config
     return None
 
-def load_authenticator():
-    """Load and initialize the authenticator"""
-    create_default_credentials()
+def simple_authenticate(username, password):
+    """Simple authentication without external libraries"""
+    if not os.path.exists(CREDENTIALS_FILE):
+        create_default_credentials()
     
     with open(CREDENTIALS_FILE, 'r') as file:
         config = yaml.load(file, Loader=SafeLoader)
     
-    authenticator = stauth.Authenticate(
-        config['credentials'],
-        config['cookie']['name'],
-        config['cookie']['key'],
-        config['cookie']['expiry_days']
-    )
+    hashed_input = hash_password(password)
     
-    return authenticator, config
+    if username in config['credentials']['usernames']:
+        stored_password = config['credentials']['usernames'][username]['password']
+        if hashed_input == stored_password:
+            return True, config['credentials']['usernames'][username]
+    
+    return False, None
 
 def check_authentication():
     """Handle user authentication"""
-    if 'authenticator' not in st.session_state:
-        st.session_state['authenticator'], st.session_state['config'] = load_authenticator()
-    
-    authenticator = st.session_state['authenticator']
-    config = st.session_state['config']
-    
     # Check if already authenticated
-    if st.session_state.get('authentication_status'):
+    if st.session_state.get('authenticated', False):
         return True, st.session_state['name'], st.session_state['username'], st.session_state['user_role']
     
     # Show login form
@@ -152,34 +144,36 @@ def check_authentication():
     <div class="login-container">
         <h1>🔐 Local Health Tracker</h1>
         <h3>MANAK Inspire Award Submission</h3>
-        <p>Secure Access Required - Please Login to Continue</p>
+        <p>Please Login to Continue</p>
     </div>
     """, unsafe_allow_html=True)
     
-    name, authentication_status, username = authenticator.login('Login', 'main')
-    
-    if authentication_status == False:
-        st.error('❌ Username/password is incorrect')
-        return False, None, None, None
-    elif authentication_status == None:
-        st.warning('👋 Please enter your username and password')
-        with st.expander("🔑 Default Login Credentials"):
-            st.info("""
-            **Regular User:** username: `user1`, password: `userpass123`  
-            **Admin User:** username: `admin1`, password: `adminpass123`
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        login_button = st.form_submit_button("Login")
+        
+        if login_button:
+            is_valid, user_data = simple_authenticate(username, password)
             
-            ⚠️ **Change these passwords in production!**
-            """)
-        return False, None, None, None
+            if is_valid:
+                st.session_state['authenticated'] = True
+                st.session_state['name'] = user_data['name']
+                st.session_state['username'] = username
+                st.session_state['user_role'] = user_data.get('role', 'user')
+                st.success("✅ Login successful!")
+                st.rerun()
+            else:
+                st.error("❌ Invalid username or password")
     
-    # Successful authentication
-    user_role = config['credentials']['usernames'][username].get('role', 'user')
-    st.session_state['authentication_status'] = True
-    st.session_state['name'] = name
-    st.session_state['username'] = username
-    st.session_state['user_role'] = user_role
+    # Show default credentials
+    with st.expander("🔑 Default Login Credentials"):
+        st.info("""
+        **Regular User:** username: `user1`, password: `userpass123`  
+        **Admin User:** username: `admin1`, password: `adminpass123`
+        """)
     
-    return True, name, username, user_role
+    return False, None, None, None
 
 # Data Management Functions
 def initialize_data_file():
@@ -193,11 +187,16 @@ def initialize_data_file():
 def load_data():
     """Load symptom data from CSV file"""
     try:
-        df = pd.read_csv(DATA_FILE)
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['date'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-        return df
+        if os.path.exists(DATA_FILE):
+            df = pd.read_csv(DATA_FILE)
+            if not df.empty:
+                df['date'] = pd.to_datetime(df['date'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            return df
+        else:
+            return pd.DataFrame(columns=[
+                'date', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
+            ])
     except:
         return pd.DataFrame(columns=[
             'date', 'age_group', 'area', 'duration', 'symptoms', 'severity', 'timestamp'
@@ -249,7 +248,6 @@ def analyze_trends(df):
     
     for symptom in top_symptoms:
         daily_counts = []
-        # Go through last 30 days in chronological order
         for i in range(30):
             check_date = (datetime.now() - timedelta(days=29-i)).date()
             day_data = df[df['date'].dt.date == check_date]
@@ -326,13 +324,13 @@ def show_admin_panel():
     # Data management section
     st.subheader("📋 Health Data Management")
     
-    tab1, tab2, tab3 = st.tabs(["🔍 View Data", "🗑️ Delete Records", "📊 Advanced Analytics"])
+    tab1, tab2 = st.tabs(["🔍 View Data", "🗑️ Delete Records"])
     
     with tab1:
         st.write("**All Health Records:**")
         
         # Add filters
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         
         with col1:
             selected_areas = st.multiselect(
@@ -342,19 +340,15 @@ def show_admin_panel():
             )
         
         with col2:
-            date_range = st.date_input(
-                "Date Range:",
-                value=[df['date'].min().date(), df['date'].max().date()],
-                min_value=df['date'].min().date(),
-                max_value=df['date'].max().date()
-            )
-        
-        with col3:
-            selected_age_groups = st.multiselect(
-                "Filter by Age Group:",
-                options=df['age_group'].unique(),
-                default=df['age_group'].unique()
-            )
+            if not df.empty:
+                date_range = st.date_input(
+                    "Date Range:",
+                    value=[df['date'].min().date(), df['date'].max().date()],
+                    min_value=df['date'].min().date(),
+                    max_value=df['date'].max().date()
+                )
+            else:
+                date_range = [datetime.now().date(), datetime.now().date()]
         
         # Apply filters
         filtered_df = df.copy()
@@ -367,131 +361,42 @@ def show_admin_panel():
                 (filtered_df['date'].dt.date <= date_range[1])
             ]
         
-        if selected_age_groups:
-            filtered_df = filtered_df[filtered_df['age_group'].isin(selected_age_groups)]
-        
         st.dataframe(
             filtered_df.sort_values('timestamp', ascending=False),
             use_container_width=True,
             height=400
         )
-        
-        # Export filtered data
-        if not filtered_df.empty:
-            csv = filtered_df.to_csv(index=False)
-            st.download_button(
-                label="⬇️ Download Filtered Data",
-                data=csv,
-                file_name=f"filtered_health_data_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
     
     with tab2:
         st.write("**Delete Health Records:**")
         st.warning("⚠️ **Caution:** Record deletion is permanent and cannot be undone!")
         
         if not df.empty:
-            # Show records with selection
-            st.write("Select records to delete:")
+            # Simple deletion by index
+            st.write("Enter row numbers to delete (comma-separated):")
+            delete_indices = st.text_input("Row numbers (0, 1, 2, etc.):", "")
             
-            # Create a simplified display for selection
-            display_df = df.copy()
-            display_df['Select'] = False
-            display_df = display_df[['Select', 'date', 'age_group', 'area', 'symptoms', 'severity']]
-            
-            # Show recent records for deletion (last 50)
-            recent_df = df.tail(50).copy()
-            
-            selected_indices = []
-            
-            for idx, row in recent_df.iterrows():
-                col1, col2 = st.columns([1, 10])
-                with col1:
-                    if st.checkbox("", key=f"delete_{idx}"):
-                        selected_indices.append(idx)
-                with col2:
-                    st.write(f"**{row['date'].strftime('%Y-%m-%d')}** | {row['area']} | {row['age_group']} | {row['symptoms'][:50]}...")
-            
-            if selected_indices:
-                st.error(f"⚠️ You have selected {len(selected_indices)} records for deletion")
-                
-                if st.button("🗑️ Delete Selected Records", type="secondary"):
-                    # Confirmation
-                    if st.button("⚠️ CONFIRM DELETE - This cannot be undone!", type="primary"):
-                        # Delete selected records
-                        df_updated = df.drop(selected_indices)
-                        df_updated.to_csv(DATA_FILE, index=False)
+            if delete_indices:
+                try:
+                    indices_list = [int(x.strip()) for x in delete_indices.split(',')]
+                    valid_indices = [i for i in indices_list if 0 <= i < len(df)]
+                    
+                    if valid_indices:
+                        st.error(f"⚠️ You are about to delete {len(valid_indices)} records")
                         
-                        st.success(f"✅ Successfully deleted {len(selected_indices)} records")
-                        st.rerun()
-    
-    with tab3:
-        st.write("**Advanced Analytics & Insights:**")
-        
-        if not df.empty:
-            # Symptom patterns by area
-            st.subheader("🗺️ Symptom Distribution by Area")
-            area_symptoms = {}
-            
-            for _, row in df.iterrows():
-                area = row['area']
-                symptoms = str(row['symptoms']).split(', ')
-                
-                if area not in area_symptoms:
-                    area_symptoms[area] = {}
-                
-                for symptom in symptoms:
-                    symptom = symptom.strip()
-                    area_symptoms[area][symptom] = area_symptoms[area].get(symptom, 0) + 1
-            
-            # Create heatmap data
-            all_symptoms = set()
-            for area_data in area_symptoms.values():
-                all_symptoms.update(area_data.keys())
-            
-            heatmap_data = []
-            for area, symptoms in area_symptoms.items():
-                for symptom in all_symptoms:
-                    heatmap_data.append({
-                        'Area': area,
-                        'Symptom': symptom,
-                        'Count': symptoms.get(symptom, 0)
-                    })
-            
-            heatmap_df = pd.DataFrame(heatmap_data)
-            
-            if not heatmap_df.empty:
-                fig_heatmap = px.density_heatmap(
-                    heatmap_df, 
-                    x='Symptom', 
-                    y='Area', 
-                    z='Count',
-                    title="Symptom Distribution Across Areas"
-                )
-                st.plotly_chart(fig_heatmap, use_container_width=True)
-            
-            # Time-based patterns
-            st.subheader("⏰ Temporal Patterns")
-            
-            df['hour'] = df['timestamp'].dt.hour
-            df['day_of_week'] = df['timestamp'].dt.dayofweek
-            
-            hourly_reports = df['hour'].value_counts().sort_index()
-            
-            fig_hourly = px.bar(
-                x=hourly_reports.index,
-                y=hourly_reports.values,
-                title="Reports by Hour of Day",
-                labels={'x': 'Hour', 'y': 'Number of Reports'}
-            )
-            st.plotly_chart(fig_hourly, use_container_width=True)
-
-def generate_password_hash(password):
-    """Generate hashed password for new users"""
-    return stauth.Hasher([password]).generate()[0]
+                        if st.button("🗑️ Confirm Delete", type="primary"):
+                            df_updated = df.drop(df.index[valid_indices])
+                            df_updated.to_csv(DATA_FILE, index=False)
+                            st.success(f"✅ Successfully deleted {len(valid_indices)} records")
+                            st.rerun()
+                except ValueError:
+                    st.error("Please enter valid row numbers separated by commas")
 
 def main():
     """Main application function"""
+    
+    # Initialize data file
+    initialize_data_file()
     
     # Authentication check
     is_authenticated, name, username, user_role = check_authentication()
@@ -499,18 +404,16 @@ def main():
     if not is_authenticated:
         return
     
-    # Initialize data file
-    initialize_data_file()
-    
-    # Show user info and logout
+    # Show user info and logout in sidebar
     with st.sidebar:
         st.success(f"👋 Welcome, **{name}**!")
         st.info(f"🔑 Role: **{user_role.title()}**")
         
-        authenticator = st.session_state['authenticator']
-        authenticator.logout('Logout', 'sidebar')
-        
-        if st.session_state.get('authentication_status') == False:
+        if st.button("🚪 Logout"):
+            st.session_state['authenticated'] = False
+            for key in ['name', 'username', 'user_role']:
+                if key in st.session_state:
+                    del st.session_state[key]
             st.rerun()
     
     # App Header
@@ -523,7 +426,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar navigation - different options for admin vs regular users
+    # Sidebar navigation
     st.sidebar.title("🧭 Navigation")
     
     navigation_options = [
@@ -751,51 +654,10 @@ def main():
                     <p><strong>Threshold Exceeded:</strong> {outbreak['cases']} ≥ {threshold}</p>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            st.markdown("### 🎯 Recommended Actions")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("""
-                #### 🏥 For Individuals:
-                - Consult a doctor immediately
-                - Stay hydrated and rest
-                - Avoid crowded places
-                - Wear masks in public
-                - Monitor symptoms closely
-                """)
-            
-            with col2:
-                st.markdown("""
-                #### 🏛️ For Community:
-                - Inform local health authorities
-                - Increase sanitization measures
-                - Share health information
-                - Support affected families
-                - Follow official guidelines
-                """)
         
         else:
             st.success("✅ No outbreak alerts at this time")
             st.info("🛡️ The system continuously monitors for unusual patterns in symptom reports.")
-            
-            if not df.empty:
-                st.subheader("📊 Monitoring Statistics")
-                
-                recent_data = df[df['date'] >= datetime.now() - timedelta(days=days_back)]
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    fever_cases = sum('fever' in str(row['symptoms']).lower() 
-                                    for _, row in recent_data.iterrows())
-                    st.metric("🌡️ Fever Cases", fever_cases)
-                
-                with col2:
-                    st.metric("🏘️ Areas Monitored", recent_data['area'].nunique())
-                
-                with col3:
-                    st.metric("📅 Days Analyzed", days_back)
     
     elif page == "📚 Health Education":
         st.header("📚 Health Education & Resources")
@@ -838,37 +700,22 @@ def main():
         with tab2:
             st.subheader("🛡️ Prevention is Better Than Cure")
             
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("""
-                #### 🧼 Basic Hygiene:
-                - **Wash hands frequently** with soap for 20+ seconds
-                - **Use hand sanitizer** when soap isn't available
-                - **Cover coughs and sneezes** with elbow or tissue
-                - **Avoid touching** face, eyes, nose with unwashed hands
-                - **Clean and disinfect** frequently touched surfaces
-                - **Maintain good oral hygiene**
-                """)
-            
-            with col2:
-                st.markdown("""
-                #### 🍎 Healthy Lifestyle:
-                - **Balanced diet** with fruits and vegetables
-                - **Regular exercise** and adequate sleep
-                - **Stay hydrated** - drink plenty of water
-                - **Manage stress** through relaxation techniques
-                - **Avoid smoking and excessive alcohol**
-                - **Get regular health check-ups**
-                """)
-            
             st.markdown("""
-            #### 🏠 Home & Community Health:
-            - Keep your living spaces clean and well-ventilated
-            - Properly dispose of waste and maintain sanitation
-            - Ensure safe drinking water and food storage
-            - Practice social distancing when feeling unwell
-            - Support community health initiatives
+            #### 🧼 Basic Hygiene:
+            - **Wash hands frequently** with soap for 20+ seconds
+            - **Use hand sanitizer** when soap isn't available
+            - **Cover coughs and sneezes** with elbow or tissue
+            - **Avoid touching** face, eyes, nose with unwashed hands
+            - **Clean and disinfect** frequently touched surfaces
+            - **Maintain good oral hygiene**
+            
+            #### 🍎 Healthy Lifestyle:
+            - **Balanced diet** with fruits and vegetables
+            - **Regular exercise** and adequate sleep
+            - **Stay hydrated** - drink plenty of water
+            - **Manage stress** through relaxation techniques
+            - **Avoid smoking and excessive alcohol**
+            - **Get regular health check-ups**
             """)
         
         with tab3:
@@ -895,43 +742,6 @@ def main():
             - Minor aches and pains
             - Mild fatigue
             """)
-            
-            # Download health guide
-            health_guide_text = """
-LOCAL HEALTH TRACKER - HEALTH GUIDE
-
-EMERGENCY WARNING SIGNS:
-• High fever (>101.3°F) for more than 3 days
-• Difficulty breathing or shortness of breath
-• Persistent chest pain or pressure
-• Severe headache with neck stiffness
-• Persistent vomiting
-• Signs of dehydration
-• Bluish lips or face
-
-PREVENTION TIPS:
-• Wash hands frequently with soap
-• Cover coughs and sneezes
-• Maintain social distancing when sick
-• Eat balanced diet and exercise regularly
-• Stay hydrated and get adequate sleep
-• Clean and disinfect surfaces
-
-EMERGENCY CONTACTS:
-• Emergency Services: 108
-• National Health Helpline: 104
-• COVID-19 Helpline: 1075
-
-Remember: This app is for educational purposes only. 
-Always consult healthcare professionals for medical advice.
-            """
-            
-            st.download_button(
-                label="📥 Download Health Guide (PDF)",
-                data=health_guide_text,
-                file_name="health_guide.txt",
-                mime="text/plain"
-            )
     
     elif page == "📥 Data Export":
         st.header("📥 Data Export & Reports")
@@ -945,46 +755,20 @@ Always consult healthcare professionals for medical advice.
         col1, col2 = st.columns(2)
         
         with col1:
-            # Export filtered data
             st.markdown("#### 🎯 Custom Data Export")
             
-            export_areas = st.multiselect(
-                "Select Areas:",
-                options=df['area'].unique(),
-                default=df['area'].unique()
-            )
-            
-            export_date_range = st.date_input(
-                "Date Range:",
-                value=[df['date'].min().date(), df['date'].max().date()],
-                min_value=df['date'].min().date(),
-                max_value=df['date'].max().date()
-            )
-            
-            # Apply filters for export
-            export_df = df.copy()
-            if export_areas:
-                export_df = export_df[export_df['area'].isin(export_areas)]
-            
-            if len(export_date_range) == 2:
-                export_df = export_df[
-                    (export_df['date'].dt.date >= export_date_range[0]) & 
-                    (export_df['date'].dt.date <= export_date_range[1])
-                ]
-            
-            if not export_df.empty:
-                csv_data = export_df.to_csv(index=False)
+            if not df.empty:
+                csv_data = df.to_csv(index=False)
                 st.download_button(
-                    label="⬇️ Download CSV",
+                    label="⬇️ Download All Data",
                     data=csv_data,
                     file_name=f"health_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime="text/csv"
                 )
                 
-                st.success(f"✅ Ready to export {len(export_df)} records")
+                st.success(f"✅ Ready to export {len(df)} records")
         
         with col2:
-            # Summary report
             st.markdown("#### 📋 Summary Report")
             
             summary_text = f"""
@@ -995,29 +779,9 @@ OVERVIEW:
 • Total Health Reports: {len(df)}
 • Date Range: {df['date'].min().strftime('%Y-%m-%d')} to {df['date'].max().strftime('%Y-%m-%d')}
 • Areas Covered: {df['area'].nunique()}
-• Age Groups: {', '.join(df['age_group'].unique())}
-
-TOP 5 SYMPTOMS:
-"""
-            
-            # Add top symptoms to summary
-            all_symptoms = []
-            for symptoms_str in df['symptoms'].dropna():
-                symptoms_list = [s.strip() for s in str(symptoms_str).split(',')]
-                all_symptoms.extend(symptoms_list)
-            
-            if all_symptoms:
-                symptom_counts = pd.Series(all_symptoms).value_counts()
-                for i, (symptom, count) in enumerate(symptom_counts.head(5).items()):
-                    summary_text += f"• {symptom}: {count} reports\n"
-            
-            summary_text += f"""
-AREAS COVERED:
-{chr(10).join(f'• {area}: {count} reports' for area, count in df['area'].value_counts().head(10).items())}
 
 RECENT ACTIVITY (Last 7 days):
 • Reports: {len(df[df['date'] >= datetime.now() - timedelta(days=7)])}
-• Average Severity: {df[df['date'] >= datetime.now() - timedelta(days=7)]['severity'].mean():.1f}/10
 
 Note: This data is anonymized and aggregated for community health insights.
             """
